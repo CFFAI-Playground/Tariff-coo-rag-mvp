@@ -1,0 +1,11 @@
+# video production (Blender explainer)
+animation/
+
+# local environment and caches
+.venv/
+__pycache__/
+.claude/
+.env
+
+# not part of the RAG app
+市場調研測試資料/
