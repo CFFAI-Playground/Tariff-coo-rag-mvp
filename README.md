@@ -1,73 +1,64 @@
 # 關稅法規問答 RAG MVP
 
-用自然語言（繁體中文）查詢美國稅則、關稅措施與原產地（COO）判定。系統從內部法規 PDF、CBP 判例與 Excel 中檢索相關段落，交給 Claude 撰寫附來源引用的回答。
+用自然語言（繁體中文）查詢美國稅則、關稅措施與原產地（COO）判定。系統先從內部整理的法規、CBP 判例與稅率資料中找出相關段落，再交給 Claude 撰寫回答，每個事實都附來源引用。
 
 > 回答僅供參考，不取代正式的關務判斷或報關決策。
 
+## 解決什麼問題
+
+查詢稅則分類、Section 301 等加徵關稅與 COO 判定時，依據散落在多份長篇法規 PDF、CBP 判例與內部 Excel 中。人工翻找耗時，判例的判定邏輯（實質轉變、最後組裝地等）也需要有經驗的人才能快速對照。本系統讓使用者直接提問，數秒內取得附出處的答案。
+
 ## 運作方式
 
-1. **向量化**：問題用 Gemini API 的 `gemini-embedding-001` 轉成 768 維向量
-2. **檢索**：與索引中所有段落計算 cosine 相似度，取前 8 段
-3. **生成**：Claude（`claude-opus-5-5`）只根據這 8 段回答，每個事實標註來源編號；資料裡找不到就直接說找不到
-
-網頁會即時顯示每個步驟的耗時與檢索到的來源。每次問答都會寫入 `qa_log` 表：設定了 `DATABASE_URL` 時寫入 Postgres（線上版用 Neon），否則寫入本機的 `logs.db`（SQLite）。
-
-線上版：https://tariff-coo-rag-mvp.vercel.app （公開，不需登入）
-
-## 環境需求
-
-- Python 3.14（開發時使用的版本；Vercel 上是 3.12）
-- Gemini API 金鑰，設定在環境變數 `GEMINI_API_KEY`。免費方案每天只能向量化 1,000 段，不夠重建整個索引（1,701 段），需要付費方案
-- Anthropic API 金鑰，設定在環境變數 `ANTHROPIC_API_KEY`
-
-程式只讀環境變數，不會自動讀 `.env` 檔。
-
-## 安裝與啟動（Windows）
-
-```powershell
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-
-$env:GEMINI_API_KEY = "<你的金鑰>"      # 或設為系統環境變數
-$env:ANTHROPIC_API_KEY = "<你的金鑰>"
-.venv\Scripts\python.exe server.py
+```
+提問 ──> ① 問題向量化 ──> ② 從 1,701 段資料中找出最相關的 8 段 ──> ③ Claude 只根據這 8 段撰寫回答
+                                                                     （每個事實標註來源，資料中沒有就說找不到）
 ```
 
-打開 http://localhost:8000 即可提問。伺服器綁定 `0.0.0.0:8000`，同網段的電腦也能連線。
+網頁會即時顯示每個步驟的耗時與找到的來源，可以點開查看原文。
 
-範例問題：「鋁百葉的鋁葉片從中國進口、在越南組裝，COO 怎麼判定？」
+## 驗證結果
 
-## 更新資料
-
-repo 已附上建好的索引（`index/`），clone 後可以直接啟動。若 `稅則稅率 進出口相關規範/` 裡的文件有新增或修改，重建索引：
-
-```powershell
-.venv\Scripts\python.exe ingest.py
-```
-
-- 支援 `.pdf` 與 `.xlsx`，其他格式會略過
-- `GENERAL RULES OF INTERPRETATION` 那份（878 頁稅則表）刻意排除，內容太雜，會干擾檢索
-- 每次都從頭重建，需要 `GEMINI_API_KEY`
-- 碰到每分鐘上限會等 60 秒再試；碰到每日上限或預付餘額不足（402）會直接停止並印出原因，`index/` 不會被改動
-- 重建後要 commit `index/` 並部署，線上版才會用到新索引
-
-## 部署（Vercel）
-
-- push 到 `main` 會自動部署到 Production（Vercel 專案連著這個 GitHub repo）
-- `vercel.json` 指定 `framework: fastapi`。少了它，Vercel 會把整個 repo 當靜態網站公開，程式碼和 `index/chunks.jsonl` 都能被直接下載
-- Vercel 專案需要的環境變數：`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`、`DATABASE_URL`（Neon，從 Vercel Marketplace 接上時自動加入）。Production、Preview 都要設
-- `.vercelignore` 排除了執行時用不到的檔案（原始文件、動畫、`logs.db` 等）
-
-## 檔案結構
-
-| 路徑 | 說明 |
+| 測試題 | 結果 |
 |---|---|
-| `server.py` | FastAPI 伺服器：網頁與 `/api/ask`（NDJSON 串流）|
-| `rag.py` | 向量化、檢索、呼叫 Claude 與系統提示詞 |
-| `ingest.py` | 讀取文件、切段、建立索引 |
-| `static/index.html` | 前端網頁 |
-| `index/` | 向量索引（`vectors.npy`、`chunks.jsonl`）|
-| `稅則稅率 進出口相關規範/` | 知識庫原始文件 |
-| `logs.db` | 本機問答紀錄（表 `qa_log`）；線上版寫入 Neon |
-| `vercel.json` | Vercel 部署設定 |
-| `PRD.md` | 需求與設計文件 |
+| 鋁百葉的葉片從大陸進口、在台灣組裝，COO 怎麼判定？ | ✅ 找到對應的 CBP 判例，判定 COO 為台灣，並提醒判例事實與提問不完全相同 |
+| 毛毯＋抱枕＋馬克杯的禮盒組，要整組報還是分開報？ | ✅ 依 GRI 3(b) 判定應分開報，並列出各品項稅率；註明是比照同類案例推論 |
+| 日本進口清酒到美國的關稅稅率是多少？（資料範圍外） | ✅ 明確回答找不到確切稅率，未編造數字，並說明還缺哪些資料 |
+
+回應時間約 13～21 秒（首字約 4～8 秒）。正式的 20 題測試集尚未建立。
+
+## 知識庫範圍
+
+| 類別 | 內容 |
+|---|---|
+| 法規 | 19 CFR Part 102（原產國認定）、CBP 紡織品原產地規則 |
+| 關稅措施 | Chapter 99（9903.01）、Forced Labor 301 |
+| 判例 | CBP HQ / NY rulings（毛毯、窗簾、鋁百葉等） |
+| 內部整理 | 產品稅則稅率表、COO 認定原則、禮盒組歸類說明 |
+
+## 技術架構
+
+| 元件 | 選型 |
+|---|---|
+| 向量化 | Google Gemini Embedding API |
+| 檢索 | 向量相似度比對（資料量小，不需向量資料庫） |
+| 回答生成 | Anthropic Claude API |
+| 後端 / 前端 | Python FastAPI / 單一網頁 |
+| 部署 | Vercel |
+| 問答紀錄 | Postgres 資料庫（每次提問的問題、來源、回答與耗時） |
+
+## 限制與風險
+
+- **資料外傳**：建立索引時，文件段落會送到 Google；每次提問，問題與相關段落會送到 Google 與 Anthropic。是否符合公司資料政策待確認。
+- **無登入機制**：目前任何拿到網址的人都能使用，每次提問都會產生 API 費用。
+- **單輪問答**：還不能追問。
+- **資料時效**：文件需人工更新後重建索引。
+- **表格抽取**：PDF 中的表格會被攤平，稅率類問題可能出錯。
+
+## 下一步
+
+1. 建立 20 題測試集並評估正確率
+2. 開放 2～3 位內部使用者試用、收集回饋
+3. 依結果決定是否加上登入、多輪對話，或擴充資料範圍
+
+線上試用網址與開發部署說明，請洽專案負責人。
