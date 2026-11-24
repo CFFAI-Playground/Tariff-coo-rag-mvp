@@ -116,10 +116,13 @@ def main():
                 vectors.extend(embed([c["text"] for c in group], "RETRIEVAL_DOCUMENT", [c["source"] for c in group]))
                 break
             except urllib.error.HTTPError as e:
-                if e.code != 429:
-                    raise
-                print("\n  rate limited, waiting 60s ...")
-                time.sleep(60)
+                body = e.read().decode(errors="replace")
+                # per-minute limits clear in a minute; per-day quota (429 "...PerDay...") or no credits (402) never will
+                if e.code == 429 and "PerDay" not in body:
+                    print("\n  rate limited, waiting 60s ...")
+                    time.sleep(60)
+                    continue
+                sys.exit(f"\nGemini API error {e.code} at chunk {i}/{len(chunks)}; index/ left unchanged.\n{body}")
         print(f"  {min(i + batch, len(chunks))}/{len(chunks)}", end="\r", flush=True)
 
     vecs = np.array(vectors, dtype=np.float32)
