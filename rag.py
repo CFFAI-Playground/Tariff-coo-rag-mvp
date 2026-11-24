@@ -1,5 +1,6 @@
-"""Core RAG logic: local embeddings (Ollama), retrieval, and answer generation (Claude API)."""
+"""Core RAG logic: embeddings (Gemini API), retrieval, and answer generation (Claude API)."""
 import json
+import os
 import urllib.request
 from pathlib import Path
 
@@ -7,8 +8,9 @@ import anthropic
 import numpy as np
 
 INDEX_DIR = Path(__file__).parent / "index"
-OLLAMA_URL = "http://localhost:11434/api/embed"
-EMBED_MODEL = "embeddinggemma:300m"
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:batchEmbedContents"
+EMBED_DIMS = 768
 CLAUDE_MODEL = "claude-opus-5-5"
 TOP_K = 8
 
@@ -23,15 +25,25 @@ SYSTEM_PROMPT = """你是公司內部的進出口法規與關稅問答助理。�
 - 回答精簡，先給結論，再給依據。"""
 
 
-def embed(texts):
-    """Embed a list of strings with the local Ollama model. Returns list of vectors."""
+def embed(texts, task, titles=None):
+    """Embed up to 100 strings with the Gemini API (key in GEMINI_API_KEY). Returns list of vectors.
+
+    task is "RETRIEVAL_DOCUMENT" (index chunks, optionally with titles) or "RETRIEVAL_QUERY" (questions).
+    """
+    requests = []
+    for i, text in enumerate(texts):
+        r = {"model": f"models/{EMBED_MODEL}", "content": {"parts": [{"text": text}]},
+             "taskType": task, "outputDimensionality": EMBED_DIMS}
+        if titles:
+            r["title"] = titles[i]
+        requests.append(r)
     req = urllib.request.Request(
-        OLLAMA_URL,
-        data=json.dumps({"model": EMBED_MODEL, "input": texts}).encode(),
-        headers={"Content-Type": "application/json"},
+        EMBED_URL,
+        data=json.dumps({"requests": requests}).encode(),
+        headers={"Content-Type": "application/json", "x-goog-api-key": os.environ["GEMINI_API_KEY"]},
     )
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        return json.loads(resp.read())["embeddings"]
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return [e["values"] for e in json.loads(resp.read())["embeddings"]]
 
 
 class Index:
@@ -41,7 +53,7 @@ class Index:
             self.chunks = [json.loads(line) for line in f]
 
     def embed_query(self, query):
-        q = np.array(embed([f"task: search result | query: {query}"])[0], dtype=np.float32)
+        q = np.array(embed([query], "RETRIEVAL_QUERY")[0], dtype=np.float32)
         return q / np.linalg.norm(q)
 
     def search(self, query, k=TOP_K):

@@ -1,10 +1,12 @@
 """Web server: serves the chat page and a streaming /api/ask endpoint.
 
 Usage: .venv\\Scripts\\python.exe server.py   (listens on 0.0.0.0:8000 for LAN access)
-Every question is logged to logs.db (SQLite, table qa_log).
+Every question is logged to table qa_log: Postgres when DATABASE_URL is set (Vercel + Neon),
+otherwise the local SQLite file logs.db.
 """
 import asyncio
 import json
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -19,18 +21,28 @@ from pydantic import BaseModel
 
 from rag import CLAUDE_MODEL, EMBED_MODEL, Index, stream_answer
 
-LOG_DB = Path(__file__).parent / "logs.db"
+BASE_DIR = Path(__file__).parent
+LOG_DB = BASE_DIR / "logs.db"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 index = Index()
 client = anthropic.AsyncAnthropic()
 
 
+def log_db():
+    if DATABASE_URL:
+        import psycopg
+        return psycopg.connect(DATABASE_URL)
+    return sqlite3.connect(LOG_DB)
+
+
 def init_log_db():
-    with sqlite3.connect(LOG_DB) as db:
-        db.execute("""CREATE TABLE IF NOT EXISTS qa_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_col = "SERIAL PRIMARY KEY" if DATABASE_URL else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    with log_db() as db:
+        db.execute(f"""CREATE TABLE IF NOT EXISTS qa_log (
+            id {id_col},
             created_at TEXT NOT NULL,
             question TEXT NOT NULL,
             sources_json TEXT,
@@ -44,9 +56,10 @@ def init_log_db():
 
 
 def save_log(row):
-    with sqlite3.connect(LOG_DB) as db:
+    mark = "%s" if DATABASE_URL else "?"
+    with log_db() as db:
         cols = ", ".join(row)
-        db.execute(f"INSERT INTO qa_log ({cols}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
+        db.execute(f"INSERT INTO qa_log ({cols}) VALUES ({', '.join([mark] * len(row))})", list(row.values()))
 
 
 init_log_db()
@@ -66,7 +79,7 @@ def line(obj):
 
 @app.get("/")
 def home():
-    return FileResponse("static/index.html")
+    return FileResponse(BASE_DIR / "static" / "index.html")
 
 
 @app.post("/api/ask")
@@ -78,7 +91,7 @@ async def ask(req: Ask):
         answer = []
         t_total = time.perf_counter()
         try:
-            # step 1: embed the question with the local Ollama model
+            # step 1: embed the question with the Gemini embedding API
             t = time.perf_counter()
             q = await asyncio.to_thread(index.embed_query, req.question)
             log["embed_ms"] = ms_since(t)
@@ -115,8 +128,12 @@ async def ask(req: Ask):
             log["error"] = "無法連線到 Claude API，請檢查網路。"
         except anthropic.APIStatusError as e:
             log["error"] = f"Claude API 錯誤 {e.status_code}"
+        except KeyError as e:
+            if e.args != ("GEMINI_API_KEY",):
+                raise
+            log["error"] = "Gemini API 金鑰未設定（GEMINI_API_KEY）。"
         except OSError:
-            log["error"] = "無法連線到本機 Ollama 向量模型，請確認 Ollama 已啟動。"
+            log["error"] = "無法呼叫 Gemini 向量模型 API，請檢查金鑰與網路。"
         finally:
             # runs on success, error, and client disconnect, so every question is logged
             log["answer"] = "".join(answer)

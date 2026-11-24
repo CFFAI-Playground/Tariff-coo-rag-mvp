@@ -1,11 +1,13 @@
-"""Build the vector index: read docs -> chunk -> embed with local Ollama -> index/.
+"""Build the vector index: read docs -> chunk -> embed with Gemini API -> index/.
 
-Usage: .venv\\Scripts\\python.exe ingest.py
+Usage: .venv\\Scripts\\python.exe ingest.py   (needs GEMINI_API_KEY)
 Re-run whenever documents change; the index is rebuilt from scratch.
 """
 import json
 import re
 import sys
+import time
+import urllib.error
 from pathlib import Path
 
 import numpy as np
@@ -104,12 +106,20 @@ def main():
             n += 1
         print(f"read   {path.name}: {n} chunks")
 
-    print(f"\nembedding {len(chunks)} chunks with Ollama ...")
+    print(f"\nembedding {len(chunks)} chunks with Gemini ...")
     vectors = []
-    batch = 32
+    batch = 50  # API max is 100; smaller batches stay under the free-tier tokens-per-minute limit
     for i in range(0, len(chunks), batch):
-        texts = [f"title: {c['source']} | text: {c['text']}" for c in chunks[i:i + batch]]
-        vectors.extend(embed(texts))
+        group = chunks[i:i + batch]
+        while True:
+            try:
+                vectors.extend(embed([c["text"] for c in group], "RETRIEVAL_DOCUMENT", [c["source"] for c in group]))
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise
+                print("\n  rate limited, waiting 60s ...")
+                time.sleep(60)
         print(f"  {min(i + batch, len(chunks))}/{len(chunks)}", end="\r", flush=True)
 
     vecs = np.array(vectors, dtype=np.float32)

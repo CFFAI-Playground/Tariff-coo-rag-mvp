@@ -108,7 +108,7 @@ function renderAnswer(container, text, srcBox) {
 function makeSteps() {
   const box = el('div', 'steps');
   const defs = [
-    ['embed', '① 問題向量化', '把問題轉成向量（本機 Ollama）'],
+    ['embed', '① 問題向量化', '把問題轉成向量（Gemini API）'],
     ['retrieve', '② 向量檢索', '和所有文件段落比對相似度'],
     ['generate', '③ Claude 生成', '根據檢索到的段落撰寫回答'],
   ];

@@ -9,3 +9,6 @@ __pycache__/
 
 # not part of the RAG app
 市場調研測試資料/
+
+.vercel
+.env*

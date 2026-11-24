@@ -1,0 +1,8 @@
+# not needed at runtime on Vercel
+.venv/
+__pycache__/
+animation/
+logs.db
+PRD.md
+市場調研測試資料/
+稅則稅率 進出口相關規範/

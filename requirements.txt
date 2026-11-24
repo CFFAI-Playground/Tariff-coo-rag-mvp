@@ -4,3 +4,4 @@ uvicorn
 numpy
 openpyxl
 pypdf
+psycopg[binary]
